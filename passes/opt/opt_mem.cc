@@ -62,7 +62,12 @@ struct OptMemPass : public Pass {
 				std::vector<bool> always_1(mem.width, true);
 				bool changed = false;
 				for (auto &port : mem.wr_ports) {
+					if (port.has_attribute(ID::keep)) {
+						continue;
+					}
+
 					if (port.en.is_fully_zero()) {
+						log_debug("%s.%s: removing write port (en is always 0)\n", log_id(module->name), log_id(mem.memid));
 						port.removed = true;
 						changed = true;
 						total_count++;
@@ -100,9 +105,18 @@ struct OptMemPass : public Pass {
 						}
 					}
 				}
+
+				bool has_keep_port = false;
+				for (auto &port : mem.rd_ports) {
+					if (port.has_attribute(ID::keep)) {
+						has_keep_port = true;
+						break;
+					}
+				}
+
 				std::vector<int> swizzle;
 				for (int i = 0; i < mem.width; i++) {
-					if (!always_0[i] && !always_1[i]) {
+					if ((!always_0[i] && !always_1[i]) || has_keep_port) {
 						swizzle.push_back(i);
 						continue;
 					}
@@ -118,7 +132,7 @@ struct OptMemPass : public Pass {
 						bit = State::Sx;
 					}
 					// Reconnect read port data.
-					for (auto &port: mem.rd_ports) {
+					for (auto &port : mem.rd_ports) {
 						for (int sub = 0; sub < (1 << port.wide_log2); sub++) {
 							int bidx = sub * mem.width + i;
 							if (!port.clk_enable) {
@@ -161,11 +175,11 @@ struct OptMemPass : public Pass {
 					continue;
 				}
 				if (GetSize(swizzle) != mem.width) {
-					for (auto &port: mem.wr_ports) {
+					for (auto &port : mem.wr_ports) {
 						SigSpec new_data;
 						SigSpec new_en;
 						for (int sub = 0; sub < (1 << port.wide_log2); sub++) {
-							for (auto i: swizzle) {
+							for (auto i : swizzle) {
 								new_data.append(port.data[sub * mem.width + i]);
 								new_en.append(port.en[sub * mem.width + i]);
 							}
@@ -173,13 +187,13 @@ struct OptMemPass : public Pass {
 						port.data = new_data;
 						port.en = new_en;
 					}
-					for (auto &port: mem.rd_ports) {
+					for (auto &port : mem.rd_ports) {
 						SigSpec new_data;
 						Const new_init;
 						Const new_arst;
 						Const new_srst;
 						for (int sub = 0; sub < (1 << port.wide_log2); sub++) {
-							for (auto i: swizzle) {
+							for (auto i : swizzle) {
 								int bidx = sub * mem.width + i;
 								new_data.append(port.data[bidx]);
 								new_init.bits().push_back(port.init_value[bidx]);
@@ -192,15 +206,15 @@ struct OptMemPass : public Pass {
 						port.arst_value = new_arst;
 						port.srst_value = new_srst;
 					}
-					for (auto &init: mem.inits) {
+					for (auto &init : mem.inits) {
 						Const new_data;
 						Const new_en;
 						for (int s = 0; s < GetSize(init.data); s += mem.width) {
-							for (auto i: swizzle) {
+							for (auto i : swizzle) {
 								new_data.bits().push_back(init.data[s + i]);
 							}
 						}
-						for (auto i: swizzle) {
+						for (auto i : swizzle) {
 							new_en.bits().push_back(init.en[i]);
 						}
 						init.data = new_data;
